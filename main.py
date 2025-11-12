@@ -1,4 +1,3 @@
-# backend/main.py
 from __future__ import annotations
 
 import json
@@ -21,15 +20,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ In-memory store
+# in-memory store
 FILES: Dict[str, Dict[str, Any]] = {}
 
-LOCK_TIMEOUT = 60 * 10  # 10 minutes
+LOCK_TIMEOUT = 60 * 10  # 10 mins
 
-
-# ================================
-# ✅ REST MODELS
-# ================================
 class FilePayload(BaseModel):
     name: str
     xml: Optional[str] = ""
@@ -39,9 +34,6 @@ class SavePayload(BaseModel):
     xml: str
 
 
-# ================================
-# ✅ REST ENDPOINTS (FIXED)
-# ================================
 
 @app.get("/files")
 async def list_files():
@@ -88,10 +80,7 @@ async def save_file(file_id: str, payload: SavePayload):
     return {"ok": True}
 
 
-# ================================
-# ✅ Helper Broadcast Functions
-# ================================
-
+#Helper Broadcast Functions
 async def broadcast(file_id: str, message: Dict[str, Any]):
     room = FILES.get(file_id)
     if not room:
@@ -124,11 +113,7 @@ async def push_state(file_id: str):
         "focus": room["focus"],
     })
 
-
-# ================================
-# ✅ WebSocket Endpoint
-# ================================
-
+#WebSocket Endpoint
 @app.websocket("/ws/{file_id}")
 async def websocket_endpoint(websocket: WebSocket, file_id: str):
     await websocket.accept()
