@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Dict, Any, Optional, Set
+from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +25,24 @@ FILES: Dict[str, Dict[str, Any]] = {}
 
 LOCK_TIMEOUT = 60 * 10  # 10 mins
 
+# blank BPMN XML template for new files
+BLANK_BPMN_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Process_1" isExecutable="false">
+    <bpmn:startEvent id="StartEvent_1"/>
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_1"/>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>
+"""
+
+
+
 class FilePayload(BaseModel):
     name: str
     xml: Optional[str] = ""
@@ -44,15 +62,13 @@ async def list_files():
 @app.post("/files")
 async def create_file(payload: FilePayload):
     fid = payload.name.strip()
-
     if not fid:
         return JSONResponse({"error": "Name cannot be empty"}, status_code=400)
-
     if fid in FILES:
         return JSONResponse({"error": "File already exists"}, status_code=409)
 
     FILES[fid] = {
-        "xml": payload.xml or "",
+        "xml": payload.xml or BLANK_BPMN_XML,
         "lock": None,
         "users": set(),
         "focus": {},
@@ -89,13 +105,12 @@ async def broadcast(file_id: str, message: Dict[str, Any]):
     text = json.dumps(message)
     dead_sockets = []
 
-    for ws in room["sockets"]:
+    for ws in list(room["sockets"]):
         try:
             await ws.send_text(text)
         except Exception:
             dead_sockets.append(ws)
 
-    # cleanup dead sockets
     for ws in dead_sockets:
         room["sockets"].discard(ws)
 
@@ -118,10 +133,10 @@ async def push_state(file_id: str):
 async def websocket_endpoint(websocket: WebSocket, file_id: str):
     await websocket.accept()
 
-    # ensure room exists
+    # ensure file exists
     if file_id not in FILES:
         FILES[file_id] = {
-            "xml": "",
+            "xml": BLANK_BPMN_XML,
             "lock": None,
             "users": set(),
             "focus": {},
@@ -145,9 +160,9 @@ async def websocket_endpoint(websocket: WebSocket, file_id: str):
 
             elif op == "lock":
                 now = time.time()
-                current_lock = room["lock"]
+                lock = room.get("lock")
 
-                if current_lock and (now - current_lock["since"] > LOCK_TIMEOUT):
+                if lock and (now - lock.get("since", now) > LOCK_TIMEOUT):
                     room["lock"] = None
 
                 if room["lock"] is None:
@@ -167,14 +182,13 @@ async def websocket_endpoint(websocket: WebSocket, file_id: str):
                     await push_state(file_id)
 
             elif op == "xml":
-                if room["lock"] and room["lock"]["by"] == username:
-                    room["xml"] = data["xml"]
-                    await broadcast(file_id, {
-                        "type": "xml",
-                        "xml": room["xml"],
-                        "by": username
-                    })
-                    await push_state(file_id)
+                # allow live XML updates for all users (even if unlocked)
+                room["xml"] = data["xml"]
+                await broadcast(file_id, {
+                    "type": "xml",
+                    "xml": room["xml"],
+                    "by": username
+                })
 
             elif op == "focus":
                 elem = data.get("element")
@@ -190,7 +204,6 @@ async def websocket_endpoint(websocket: WebSocket, file_id: str):
 
     except WebSocketDisconnect:
         pass
-
     finally:
         room["sockets"].discard(websocket)
         if username in room["users"]:
